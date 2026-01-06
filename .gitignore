@@ -1,3 +1,4 @@
 *.zip
 /data_31_40/
 *.pdf
+/venv/

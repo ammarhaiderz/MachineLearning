@@ -57,11 +57,47 @@ def cond_eval(condition, arr):
 
 # TODO implement the missing parts of this function. You find an example below, main_example(args).
 def main(args):
-    pair_list = [] # TODO implement pairs of (condition, calculation), see example below
-    
+    pair_list = []
+
+    # ----- Calculation functions -----
+
+    def calc_regime_1(arr):
+        return -0.638 * arr[169] - 0.407
+
+    def calc_regime_2(arr):
+        return 0.760 * arr[169] + 0.698
+
+    def calc_regime_3(arr):
+        return -1.651 * arr[169] - 0.100
+
+    def calc_regime_4(arr):
+        return -1.858 * arr[169] - 0.147
+
+    # ----- Conditions (ORDER MATTERS) -----
+
+    # Regime 1: feat_49 <= 0.20
+    condition_1 = (49, "<=", 0.20)
+
+    # Regime 2: feat_49 <= 0.50
+    condition_2 = (49, "<=", 0.50)
+
+    # Regime 3: feat_49 <= 0.70
+    condition_3 = (49, "<=", 0.70)
+
+    # Regime 4: else
+    condition_4 = None
+
+    pair_list = [
+        (condition_1, calc_regime_1),
+        (condition_2, calc_regime_2),
+        (condition_3, calc_regime_3),
+        (condition_4, calc_regime_4),
+    ]
+
     data_array = pd.read_csv(args.eval_file_path).values
-    
+
     return framework(pair_list, data_array)
+
 
     
 def main_example(args):
@@ -90,3 +126,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     target02 = main(args)
+    pd.DataFrame({"target02": target02}).to_csv("debug_target02.csv", index=False)
+
+    

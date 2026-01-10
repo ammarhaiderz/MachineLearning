@@ -10,15 +10,15 @@ from optuna.samplers import TPESampler
 # 1. Configuration
 # ===============================
 PROBLEM_NUM = 36
-# SELECTED_FEATURES = [
-#     'feat_155', 'feat_184', 'feat_64', 'feat_232', 'feat_253', 
-#     'feat_143', 'feat_221', 'feat_220', 'feat_160', 'feat_266', 
-#     'feat_138', 'feat_47', 'feat_203'
-# ]
-
 SELECTED_FEATURES = [
-    'feat_143', 'feat_221', 'feat_220', 'feat_155', 'feat_184', 'feat_64', 'feat_232', 'feat_253', 'feat_160', 'feat_266', 'feat_209', 'feat_267', 'feat_56'
+    'feat_155', 'feat_184', 'feat_64', 'feat_232', 'feat_253', 
+    'feat_143', 'feat_221', 'feat_220', 'feat_160', 'feat_266', 
+    'feat_138', 'feat_47', 'feat_203', "feat_131", "feat_24", "feat_104",
 ]
+
+# SELECTED_FEATURES = [
+#     'feat_143', 'feat_221', 'feat_220', 'feat_155', 'feat_184', 'feat_64', 'feat_232', 'feat_253', 'feat_160', 'feat_266', 'feat_209', 'feat_267', 'feat_56'
+# ]
 
 print(f"Problem {PROBLEM_NUM}")
 print(f"Using {len(SELECTED_FEATURES)} selected features")
@@ -65,7 +65,7 @@ def objective(trial):
         'random_strength': trial.suggest_float('random_strength', 0, 10),
         'bagging_temperature': trial.suggest_float('bagging_temperature', 0, 1),
         'border_count': trial.suggest_int('border_count', 32, 255),
-        'min_data_in_leaf': trial.suggest_int('min_data_in_leaf', 1, 50),
+        'min_data_in_leaf': trial.suggest_int('min_data_in_leaf', 30, 100),
         'loss_function': 'RMSE',
         'random_seed': 42,
         'verbose': False

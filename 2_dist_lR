@@ -1,0 +1,175 @@
+# ============================================================
+# 0. Imports
+# ============================================================
+import numpy as np
+import pandas as pd
+
+from sklearn.mixture import GaussianMixture
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score, root_mean_squared_error
+from sklearn.linear_model import LinearRegression
+
+from catboost import CatBoostClassifier
+
+
+# ============================================================
+# 1. Load data
+# ============================================================
+PROBLEM_NUM = 36
+
+SELECTED_FEATURES = [ 
+    'feat_155', 'feat_184', 'feat_64', 'feat_232', 'feat_253', 
+    'feat_143', 'feat_221', 'feat_220', 'feat_160', 'feat_266', 
+    'feat_138', 'feat_47', 'feat_203',
+]
+
+X = pd.read_csv(f"./data_31_40/problem_{PROBLEM_NUM}/dataset_{PROBLEM_NUM}.csv")
+y = pd.read_csv(f"./data_31_40/problem_{PROBLEM_NUM}/target_{PROBLEM_NUM}.csv")["target01"].values
+X_eval = pd.read_csv(f"./data_31_40/problem_{PROBLEM_NUM}/EVAL_{PROBLEM_NUM}.csv")
+
+X = X[SELECTED_FEATURES]
+X_eval = X_eval[SELECTED_FEATURES]
+
+print(f"Train X: {X.shape}, y: {y.shape}")
+print(f"Eval  X: {X_eval.shape}")
+
+
+# ============================================================
+# 2. Train / validation split
+# ============================================================
+X_train, X_val, y_train, y_val = train_test_split(
+    X, y,
+    test_size=0.2,
+    random_state=42,
+    shuffle=True
+)
+
+
+# ============================================================
+# 3. Regime discovery (GMM on TRAIN TARGET ONLY)
+# ============================================================
+gmm = GaussianMixture(n_components=2, random_state=42)
+gmm.fit(y_train.reshape(-1, 1))
+
+r_train = gmm.predict(y_train.reshape(-1, 1))
+r_val   = gmm.predict(y_val.reshape(-1, 1))
+
+means = gmm.means_.ravel()
+order = np.argsort(means)
+
+r_train = np.array([np.where(order == r)[0][0] for r in r_train])
+r_val   = np.array([np.where(order == r)[0][0] for r in r_val])
+
+print("\nGMM regime means:", means[order])
+print("Train regime proportions:", np.bincount(r_train) / len(r_train))
+
+
+# ============================================================
+# 4. Gate: X → regime probability
+# ============================================================
+gate = CatBoostClassifier(
+    iterations=600,
+    depth=6,
+    learning_rate=0.05,
+    loss_function="Logloss",
+    random_seed=42,
+    verbose=False
+)
+
+gate.fit(X_train, r_train)
+
+
+# ============================================================
+# 5. Linear Regression experts
+# ============================================================
+experts = {}
+
+for reg in [0, 1]:
+    idx = r_train == reg
+
+    lr = LinearRegression()
+    lr.fit(X_train[idx], y_train[idx])
+
+    experts[reg] = lr
+
+
+# ============================================================
+# 6. Soft Mixture-of-Experts prediction
+# ============================================================
+# --- TRAIN ---
+train_proba = gate.predict_proba(X_train)
+
+train_pred_0 = experts[0].predict(X_train)
+train_pred_1 = experts[1].predict(X_train)
+
+y_train_pred = (
+    train_proba[:, 0] * train_pred_0
+    + train_proba[:, 1] * train_pred_1
+)
+
+# --- VALIDATION ---
+val_proba = gate.predict_proba(X_val)
+
+val_pred_0 = experts[0].predict(X_val)
+val_pred_1 = experts[1].predict(X_val)
+
+y_val_pred = (
+    val_proba[:, 0] * val_pred_0
+    + val_proba[:, 1] * val_pred_1
+)
+
+
+# ============================================================
+# 7. Metrics
+# ============================================================
+print("\n" + "="*50)
+print("LINEAR-EXPERT MoE PERFORMANCE")
+print("="*50)
+
+print(f"Train R²:   {r2_score(y_train, y_train_pred):.4f}")
+print(f"Train RMSE: {root_mean_squared_error(y_train, y_train_pred):.4f}")
+print(f"Val R²:     {r2_score(y_val, y_val_pred):.4f}")
+print(f"Val RMSE:   {root_mean_squared_error(y_val, y_val_pred):.4f}")
+
+print("="*50)
+
+
+# ============================================================
+# 8. Train FINAL models on FULL data
+# ============================================================
+gmm_full = GaussianMixture(n_components=2, random_state=42)
+gmm_full.fit(y.reshape(-1, 1))
+
+regime_full = gmm_full.predict(y.reshape(-1, 1))
+means_full = gmm_full.means_.ravel()
+order_full = np.argsort(means_full)
+regime_full = np.array([np.where(order_full == r)[0][0] for r in regime_full])
+
+gate.fit(X, regime_full)
+
+for reg in [0, 1]:
+    experts[reg].fit(X[regime_full == reg], y[regime_full == reg])
+
+
+# ============================================================
+# 9. EVAL prediction
+# ============================================================
+eval_proba = gate.predict_proba(X_eval)
+
+eval_pred_0 = experts[0].predict(X_eval)
+eval_pred_1 = experts[1].predict(X_eval)
+
+y_eval_pred = (
+    eval_proba[:, 0] * eval_pred_0
+    + eval_proba[:, 1] * eval_pred_1
+)
+
+
+# ============================================================
+# 10. Save output
+# ============================================================
+output_file = f"EVAL_target01_{PROBLEM_NUM}_linear_moe.csv"
+pd.DataFrame({"target01": y_eval_pred}).to_csv(output_file, index=False)
+
+print(f"\nPredictions saved to: {output_file}")
+print("Sample predictions:", y_eval_pred[:10])

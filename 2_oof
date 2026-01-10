@@ -1,0 +1,223 @@
+# ============================================================
+# 0. Imports
+# ============================================================
+import numpy as np
+import pandas as pd
+
+from sklearn.mixture import GaussianMixture
+from sklearn.model_selection import train_test_split, KFold
+from sklearn.metrics import r2_score, root_mean_squared_error
+
+from catboost import CatBoostClassifier, CatBoostRegressor
+
+
+# ============================================================
+# 1. Load data
+# ============================================================
+PROBLEM_NUM = 36
+
+SELECTED_FEATURES = [ 
+    'feat_155', 'feat_184', 'feat_64', 'feat_232', 'feat_253', 
+    'feat_143', 'feat_221', 'feat_220', 'feat_160', 'feat_266', 
+    'feat_138', 'feat_47', 'feat_203',
+]
+
+X = pd.read_csv(f"./data_31_40/problem_{PROBLEM_NUM}/dataset_{PROBLEM_NUM}.csv")
+y = pd.read_csv(f"./data_31_40/problem_{PROBLEM_NUM}/target_{PROBLEM_NUM}.csv")["target01"].values
+X_eval = pd.read_csv(f"./data_31_40/problem_{PROBLEM_NUM}/EVAL_{PROBLEM_NUM}.csv")
+
+X = X[SELECTED_FEATURES]
+X_eval = X_eval[SELECTED_FEATURES]
+
+print(f"Train X: {X.shape}, y: {y.shape}")
+print(f"Eval  X: {X_eval.shape}")
+
+
+# ============================================================
+# 2. HOLD-OUT TRAIN / VALIDATION SPLIT (for development)
+# ============================================================
+X_train, X_val, y_train, y_val = train_test_split(
+    X, y,
+    test_size=0.2,
+    random_state=42,
+    shuffle=True
+)
+
+print(f"\nHold-out split:")
+print(f"Train: {len(X_train)} samples")
+print(f"Val:   {len(X_val)} samples")
+
+
+# ============================================================
+# 3. TRAIN / VAL MODEL (same as before, for comparison)
+# ============================================================
+gmm = GaussianMixture(n_components=2, random_state=42)
+gmm.fit(y_train.reshape(-1, 1))
+
+r_train = gmm.predict(y_train.reshape(-1, 1))
+r_val = gmm.predict(y_val.reshape(-1, 1))
+
+means = gmm.means_.ravel()
+order = np.argsort(means)
+
+r_train = np.array([np.where(order == r)[0][0] for r in r_train])
+r_val   = np.array([np.where(order == r)[0][0] for r in r_val])
+
+clf = CatBoostClassifier(
+    iterations=600,
+    depth=6,
+    learning_rate=0.05,
+    loss_function="Logloss",
+    random_seed=42,
+    verbose=False
+)
+clf.fit(X_train, r_train)
+
+regressors = {}
+for reg in [0, 1]:
+    idx = r_train == reg
+    model = CatBoostRegressor(
+        iterations=800,
+        depth=6,
+        learning_rate=0.05,
+        loss_function="RMSE",
+        random_seed=42,
+        verbose=False
+    )
+    model.fit(X_train[idx], y_train[idx])
+    regressors[reg] = model
+
+# Train predictions (in-sample, optimistic)
+train_proba = clf.predict_proba(X_train)
+train_pred = (
+    train_proba[:, 0] * regressors[0].predict(X_train)
+    + train_proba[:, 1] * regressors[1].predict(X_train)
+)
+
+# Validation predictions
+val_proba = clf.predict_proba(X_val)
+val_pred = (
+    val_proba[:, 0] * regressors[0].predict(X_val)
+    + val_proba[:, 1] * regressors[1].predict(X_val)
+)
+
+
+# ============================================================
+# 4. OOF PREDICTIONS (TRUE GENERALIZATION TEST)
+# ============================================================
+K = 5
+kf = KFold(n_splits=K, shuffle=True, random_state=42)
+
+oof_pred = np.zeros(len(X))
+
+print(f"\nRunning {K}-Fold OOF...")
+
+for fold, (tr_idx, va_idx) in enumerate(kf.split(X)):
+    print(f"  Fold {fold+1}/{K}")
+
+    X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
+    y_tr, y_va = y[tr_idx], y[va_idx]
+
+    # Regime discovery on TRAIN FOLD ONLY
+    gmm = GaussianMixture(n_components=2, random_state=42)
+    gmm.fit(y_tr.reshape(-1, 1))
+
+    r_tr = gmm.predict(y_tr.reshape(-1, 1))
+    means = gmm.means_.ravel()
+    order = np.argsort(means)
+    r_tr = np.array([np.where(order == r)[0][0] for r in r_tr])
+
+    # Gate
+    clf = CatBoostClassifier(
+        iterations=600,
+        depth=6,
+        learning_rate=0.05,
+        loss_function="Logloss",
+        random_seed=42,
+        verbose=False
+    )
+    clf.fit(X_tr, r_tr)
+
+    # Experts
+    regressors = {}
+    for reg in [0, 1]:
+        idx = r_tr == reg
+        model = CatBoostRegressor(
+            iterations=800,
+            depth=6,
+            learning_rate=0.05,
+            loss_function="RMSE",
+            random_seed=42,
+            verbose=False
+        )
+        model.fit(X_tr[idx], y_tr[idx])
+        regressors[reg] = model
+
+    # Predict OOF fold
+    proba = clf.predict_proba(X_va)
+    pred = (
+        proba[:, 0] * regressors[0].predict(X_va)
+        + proba[:, 1] * regressors[1].predict(X_va)
+    )
+
+    oof_pred[va_idx] = pred
+
+
+# ============================================================
+# 5. METRICS SUMMARY
+# ============================================================
+print("\n" + "="*60)
+print("MODEL PERFORMANCE SUMMARY")
+print("="*60)
+
+print("IN-SAMPLE TRAIN (optimistic, sanity check)")
+print(f"  R²:   {r2_score(y_train, train_pred):.4f}")
+print(f"  RMSE: {root_mean_squared_error(y_train, train_pred):.4f}\n")
+
+print("HOLD-OUT VALIDATION")
+print(f"  R²:   {r2_score(y_val, val_pred):.4f}")
+print(f"  RMSE: {root_mean_squared_error(y_val, val_pred):.4f}\n")
+
+print("OOF (TRUE GENERALIZATION)")
+print(f"  R²:   {r2_score(y, oof_pred):.4f}")
+print(f"  RMSE: {root_mean_squared_error(y, oof_pred):.4f}")
+
+print("="*60)
+
+
+# ============================================================
+# 6. FINAL TRAINING ON FULL DATA
+# ============================================================
+gmm_full = GaussianMixture(n_components=2, random_state=42)
+gmm_full.fit(y.reshape(-1, 1))
+
+regime_full = gmm_full.predict(y.reshape(-1, 1))
+means_full = gmm_full.means_.ravel()
+order_full = np.argsort(means_full)
+
+regime_full = np.array([np.where(order_full == r)[0][0] for r in regime_full])
+
+clf.fit(X, regime_full)
+
+for reg in [0, 1]:
+    regressors[reg].fit(X[regime_full == reg], y[regime_full == reg])
+
+
+# ============================================================
+# 7. EVAL PREDICTION
+# ============================================================
+eval_proba = clf.predict_proba(X_eval)
+y_eval_pred = (
+    eval_proba[:, 0] * regressors[0].predict(X_eval)
+    + eval_proba[:, 1] * regressors[1].predict(X_eval)
+)
+
+
+# ============================================================
+# 8. SAVE OUTPUT
+# ============================================================
+output_file = f"EVAL_target01_{PROBLEM_NUM}.csv"
+pd.DataFrame({"target01": y_eval_pred}).to_csv(output_file, index=False)
+
+print(f"\nPredictions saved to: {output_file}")
+print("Sample predictions:", y_eval_pred[:10])

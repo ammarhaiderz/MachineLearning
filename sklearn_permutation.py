@@ -11,7 +11,7 @@ from sklearn.metrics import r2_score
 from sklearn.inspection import permutation_importance
 from sklearn.ensemble import RandomForestRegressor
 
-from catboost import CatBoostRegressor
+from catboost_model import CatBoostRegressor
 
 import matplotlib.pyplot as plt
 

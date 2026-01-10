@@ -1,4 +1,7 @@
 *.zip
 /data_31_40/
+/data_11_20/
 *.pdf
 /venv/
+/catboost_info/
+__pycache__/
